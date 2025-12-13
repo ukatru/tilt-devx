@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-example
+  labels:
+    app: python-example
+spec:
+  selector:
+    matchLabels:
+      app: python-example
+  template:
+    metadata:
+      labels:
+        app: python-example
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: docker001.ukatru.com
+      containers:
+        - name: python-example
+          image: python-tilt
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tiltfile
+                  key: postgres-password
