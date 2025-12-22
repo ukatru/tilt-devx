@@ -1,0 +1,324 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tilt-templates
+  labels:
+    app: tilt-templates
+    purpose: developer-templates
+data:
+  # Tiltfile template
+  Tiltfile: |
+    #load('ext://helm_resource', 'helm_resource', 'helm_repo')
+    load('ext://podman', 'podman_build')
+    load('ext://secret', 'secret_from_dict')
+    load('ext://dotenv', 'dotenv')
+    #load('ext://uibutton', 'cmd_button')
+
+    # Load environment variables from .env file
+    dotenv('.env')
+
+    # ========== CONFIGURABLE VARIABLES ==========
+    # These can be set in .env file or will use defaults
+    APP_NAME = os.getenv('APP_NAME', 'python-example')
+    CONTAINER_FILE = os.getenv('CONTAINER_FILE', 'Dockerfile.simple')
+    K8S_YAML_FILE = os.getenv('K8S_YAML_FILE', 'k8s.yaml')
+    K8S_NAMESPACE = os.getenv('K8S_NAMESPACE', 'default')
+    PORT_FORWARD = os.getenv('PORT_FORWARD', '8080:8787')
+    CONTAINER_PORT = os.getenv('CONTAINER_PORT', '8080')
+    REPLICAS = os.getenv('REPLICAS', '1')
+    NODE_SELECTOR = os.getenv('NODE_SELECTOR', '')
+    IMAGE_PULL_SECRET = os.getenv('IMAGE_PULL_SECRET', '')
+    DOCKER_REGISTRY = os.getenv('DOCKER_REGISTRY', 'docker.io/ukatru')
+    AWS_REGION = os.getenv('AWS_REGION', 'us-west-2')
+    AWS_ACCOUNT_ID = os.getenv('AWS_ACCOUNT_ID', '')
+    USE_ECR = os.getenv('USE_ECR', 'false').lower() == 'true'
+    CREATE_SECRETS = os.getenv('CREATE_SECRETS', 'true').lower() == 'true'
+
+    # Opinionated: secret name is always APP_NAME-secret
+    SECRET_NAME = APP_NAME + '-secret'
+
+    print('APP_NAME: ' + APP_NAME)
+    print('SECRET_NAME: ' + SECRET_NAME)
+    print('CREATE_SECRETS: ' + str(CREATE_SECRETS))
+
+    # ========== ECR LOGIN (if enabled) ==========
+    if USE_ECR and AWS_ACCOUNT_ID:
+      ecr_registry = '{}.dkr.ecr.{}.amazonaws.com'.format(AWS_ACCOUNT_ID, AWS_REGION)
+      local_resource(
+        'ecr-login',
+        'aws ecr get-login-password --region {} | podman login --username AWS --password-stdin {}'.format(AWS_REGION, ecr_registry),
+        labels=['setup']
+      )
+      DOCKER_REGISTRY = ecr_registry
+
+    # ========== KUBERNETES CONTEXT ==========
+    allow_k8s_contexts('kubernetes-admin@kubernetes')
+    default_registry(DOCKER_REGISTRY)
+
+    # ========== DYNAMIC SECRETS ==========
+    # Automatically collect all env vars that start with SECRET_
+    secret_inputs = {}
+    for key, value in os.environ.items():
+      if key.startswith('SECRET_'):
+        # Remove SECRET_ prefix and convert to lowercase with hyphens
+        secret_key = key[7:].lower().replace('_', '-')
+        secret_inputs[secret_key] = value
+        print('Adding secret: {} (from {})'.format(secret_key, key))
+
+    # Add default postgres password if not provided
+    if 'postgres-password' not in secret_inputs:
+      secret_inputs['postgres-password'] = os.getenv('POSTGRESQL_PASSWORD', 'test')
+      print('Adding secret: postgres-password')
+
+    print('Total secrets to create: {}'.format(len(secret_inputs)))
+    print('Secret keys: {}'.format(', '.join(secret_inputs.keys())))
+
+    # Only create secrets if CREATE_SECRETS is true and we have secrets to create
+    if CREATE_SECRETS and len(secret_inputs) > 0:
+      k8s_yaml(secret_from_dict(SECRET_NAME, inputs=secret_inputs))
+      print('Created secret: ' + SECRET_NAME)
+    else:
+      print('Skipping secret creation (CREATE_SECRETS={}, secret_count={})'.format(CREATE_SECRETS, len(secret_inputs)))
+
+    # ========== RENDER K8S YAML TEMPLATE ==========
+    def render_template(template_content, variables):
+      """Replace template variables with actual values"""
+      result = template_content
+      for key, value in variables.items():
+        placeholder = '{{' + key + '}}'
+        result = result.replace(placeholder, str(value))
+      return result
+
+    # Read the k8s.yaml template
+    k8s_template = str(read_file(K8S_YAML_FILE))
+
+    # Define template variables
+    template_vars = {
+      'APP_NAME': APP_NAME,
+      'SECRET_NAME': SECRET_NAME,
+      'NAMESPACE': K8S_NAMESPACE,
+      'CONTAINER_PORT': CONTAINER_PORT,
+      'REPLICAS': REPLICAS,
+    }
+
+    # Add optional node selector
+    if NODE_SELECTOR:
+      template_vars['NODE_SELECTOR'] = '''
+          nodeSelector:
+            kubernetes.io/hostname: {}
+    '''.format(NODE_SELECTOR)
+    else:
+      template_vars['NODE_SELECTOR'] = ''
+
+    # Add optional image pull secret
+    if IMAGE_PULL_SECRET:
+      template_vars['IMAGE_PULL_SECRETS'] = '''
+          imagePullSecrets:
+          - name: {}
+    '''.format(IMAGE_PULL_SECRET)
+    else:
+      template_vars['IMAGE_PULL_SECRETS'] = ''
+
+    # Render the template
+    rendered_yaml = render_template(k8s_template, template_vars)
+    print('Rendered k8s.yaml with APP_NAME: {}'.format(APP_NAME))
+
+    # ========== BUILD AND DEPLOY ==========
+    podman_build(APP_NAME, '.', 
+      extra_flags=['--file', CONTAINER_FILE],
+    )
+
+    # Use the rendered YAML
+    k8s_yaml(blob(rendered_yaml))
+
+    k8s_resource(APP_NAME, 
+      labels=['app'],
+      port_forwards=PORT_FORWARD,
+      trigger_mode=TRIGGER_MODE_MANUAL
+    )
+
+  # k8s.yaml template
+  k8s.yaml: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: {{APP_NAME}}
+      labels:
+        app: {{APP_NAME}}
+    spec:
+      replicas: {{REPLICAS}}
+      selector:
+        matchLabels:
+          app: {{APP_NAME}}
+      template:
+        metadata:
+          labels:
+            app: {{APP_NAME}}
+        spec:
+    {{NODE_SELECTOR}}{{IMAGE_PULL_SECRETS}}      containers:
+          - name: {{APP_NAME}}
+            image: {{APP_NAME}}
+            ports:
+            - containerPort: {{CONTAINER_PORT}}
+            envFrom:
+            - secretRef:
+                name: {{SECRET_NAME}}
+                optional: true
+
+  # .env.example template
+  .env.example: |
+    # ========== APP CONFIGURATION ==========
+    # Customize these for each application
+    APP_NAME=python-example
+    CONTAINER_FILE=Dockerfile.simple
+    K8S_YAML_FILE=k8s.yaml
+    K8S_NAMESPACE=default
+    PORT_FORWARD=8080:8787
+    CONTAINER_PORT=8080
+    REPLICAS=1
+
+    # Optional: Pin to specific node (leave empty to disable)
+    NODE_SELECTOR=
+    # Example: NODE_SELECTOR=docker001.ukatru.com
+
+    # Optional: Image pull secret name (leave empty to disable)
+    IMAGE_PULL_SECRET=
+    # Example: IMAGE_PULL_SECRET=ecr-creds
+
+    # Create secrets (set to false to skip secret creation)
+    CREATE_SECRETS=true
+    # Note: Secret name will be automatically set to {APP_NAME}-secret
+
+    # ========== DOCKER REGISTRY ==========
+    # For Docker Hub
+    DOCKER_REGISTRY=docker.io/ukatru
+
+    # For ECR (set USE_ECR=true to enable)
+    USE_ECR=false
+    AWS_ACCOUNT_ID=065306945494
+    AWS_REGION=us-west-2
+
+    # ========== DYNAMIC SECRETS ==========
+    # Any variable starting with SECRET_ will be automatically added to k8s secret
+    # The SECRET_ prefix is removed and converted to lowercase with hyphens
+    # Example: SECRET_DATABASE_URL becomes "database-url" in the secret
+
+    SECRET_DATABASE_URL=postgresql://user:pass@localhost:5432/mydb
+    SECRET_API_KEY=your-api-key-here
+    SECRET_JWT_SECRET=your-jwt-secret
+    POSTGRESQL_PASSWORD=test
+
+    # More examples:
+    # SECRET_REDIS_URL=redis://localhost:6379
+    # SECRET_S3_BUCKET=my-bucket
+    # SECRET_SMTP_PASSWORD=email-password
+
+  # README for users
+  README.md: |
+    # Tilt Development Templates
+
+    This directory contains template files for setting up Tilt-based development environments.
+
+    ## Quick Start
+
+    1. **Copy templates to your project:**
+       ```bash
+       cp /apps/template/Tiltfile ./
+       cp /apps/template/k8s.yaml ./
+       cp /apps/template/.env.example .env
+       ```
+
+    2. **Edit .env with your app-specific values:**
+       ```bash
+       vim .env
+       # Change APP_NAME, CONTAINER_PORT, etc.
+       ```
+
+    3. **Create your Dockerfile:**
+       ```bash
+       # Create Dockerfile.simple or whatever you specified in CONTAINER_FILE
+       ```
+
+    4. **Run Tilt:**
+       ```bash
+       tilt up
+       ```
+
+    ## What's Included
+
+    - **Tiltfile** - Main Tilt configuration with template rendering
+    - **k8s.yaml** - Kubernetes deployment template with placeholders
+    - **.env.example** - Example environment configuration
+    - **README.md** - This file
+
+    ## Key Features
+
+    ✅ **Template-based** - Single set of files works for all apps
+    ✅ **Environment-driven** - Configure via .env file
+    ✅ **Dynamic secrets** - Prefix with SECRET_ to auto-inject
+    ✅ **Optional ECR** - Built-in AWS ECR support
+    ✅ **Developer isolation** - Unique resource names per app
+
+    ## Configuration
+
+    All configuration is done via the `.env` file:
+
+    ```bash
+    APP_NAME=my-awesome-app          # Your app name
+    CONTAINER_PORT=3000              # Container port
+    PORT_FORWARD=3000:3000           # Local:Container port mapping
+    REPLICAS=1                       # Number of replicas
+
+    # Secrets (auto-injected as env vars)
+    SECRET_DATABASE_URL=postgresql://localhost/db
+    SECRET_API_KEY=abc123
+    ```
+
+    ## Template Variables
+
+    The k8s.yaml template uses these placeholders:
+    - `{{APP_NAME}}` - Application name
+    - `{{REPLICAS}}` - Number of replicas
+    - `{{CONTAINER_PORT}}` - Container port
+    - `{{SECRET_NAME}}` - Auto-generated: {APP_NAME}-secret
+    - `{{NODE_SELECTOR}}` - Optional node selector
+    - `{{IMAGE_PULL_SECRETS}}` - Optional image pull secrets
+
+    ## Examples
+
+    ### Simple Web App
+    ```bash
+    APP_NAME=web-frontend
+    CONTAINER_FILE=Dockerfile
+    CONTAINER_PORT=3000
+    PORT_FORWARD=3000:3000
+    SECRET_DATABASE_URL=postgresql://localhost/webapp
+    ```
+
+    ### API with ECR
+    ```bash
+    APP_NAME=payment-api
+    USE_ECR=true
+    AWS_ACCOUNT_ID=123456789012
+    IMAGE_PULL_SECRET=ecr-creds
+    SECRET_STRIPE_KEY=sk_live_xxx
+    ```
+
+    ## Tips
+
+    - Never commit `.env` - it contains secrets
+    - Use unique `APP_NAME` to avoid conflicts with other developers
+    - All `SECRET_*` variables become Kubernetes secrets automatically
+    - Secret name is always `{APP_NAME}-secret`
+
+    ## Troubleshooting
+
+    **Variables not replaced?**
+    - Check `.env` file exists and has correct values
+    - Restart Tilt after changing `.env`
+
+    **Secrets not found?**
+    - Verify `CREATE_SECRETS=true` in `.env`
+    - Check variables start with `SECRET_` prefix
+
+    For more help, see the full documentation or ask your team.

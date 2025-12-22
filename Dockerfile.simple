@@ -1,0 +1,66 @@
+FROM ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    RSTUDIO_VERSION=2025.09.2-418
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    wget \
+    gdebi-core \
+    pandoc \
+    psmisc \
+    sudo \
+    lsb-release \
+    file \
+    git \
+    libapparmor1 \
+    libclang-dev \
+    libcurl4-openssl-dev \
+    libedit2 \
+    libssl-dev \
+    libxml2-dev \
+    libcairo2-dev \
+    libxt-dev \
+    libssh2-1-dev \
+    libgit2-dev \
+    libpq-dev \
+    libsasl2-dev \
+    libsqlite3-dev \
+    unixodbc-dev \
+    software-properties-common \
+    dirmngr \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install R
+RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc | tee -a /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc \
+    && add-apt-repository "deb https://cloud.r-project.org/bin/linux/ubuntu $(lsb_release -cs)-cran40/" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    r-base \
+    r-base-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install RStudio Server
+RUN wget https://download2.rstudio.org/server/jammy/amd64/rstudio-server-${RSTUDIO_VERSION}-amd64.deb \
+    && gdebi -n rstudio-server-${RSTUDIO_VERSION}-amd64.deb \
+    && rm rstudio-server-${RSTUDIO_VERSION}-amd64.deb
+
+# Create rstudio user with password
+RUN useradd -m -s /bin/bash -N -u 1000 rstudio \
+    && echo "rstudio:rstudio" | chpasswd
+
+# Configure RStudio Server
+RUN echo "www-port=8787" >> /etc/rstudio/rserver.conf \
+    && echo "www-address=0.0.0.0" >> /etc/rstudio/rserver.conf \
+    && echo "rsession-which-r=/usr/bin/R" >> /etc/rstudio/rserver.conf
+
+# Install commonly used R packages (optional - remove if not needed)
+#RUN R -e "install.packages(c('tidyverse', 'devtools', 'rmarkdown', 'shiny'), repos='https://cloud.r-project.org/')"
+
+# Expose RStudio Server port
+EXPOSE 8787
+
+# Start RStudio Server
+CMD ["/usr/lib/rstudio-server/bin/rserver", "--server-daemonize=0"]

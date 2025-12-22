@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: APP_NAME_PLACEHOLDER
+  labels:
+    app: APP_NAME_PLACEHOLDER
+spec:
+  selector:
+    matchLabels:
+      app: APP_NAME_PLACEHOLDER
+  template:
+    metadata:
+      labels:
+        app: APP_NAME_PLACEHOLDER
+    spec:
+      # Optional: Uncomment to pin to specific node
+      # nodeSelector:
+      #   kubernetes.io/hostname: your-node-name
+      
+      # Optional: Uncomment if using private registry
+      # imagePullSecrets:
+      #   - name: ecr-creds
+      
+      containers:
+        - name: APP_NAME_PLACEHOLDER
+          image: APP_NAME_PLACEHOLDER
+          ports:
+            - containerPort: 8080
+          
+          # All secrets from {APP_NAME}-secrets are automatically loaded as env vars
+          # The secret is optional - deployment will work even if secret doesn't exist
+          envFrom:
+            - secretRef:
+                name: APP_NAME_PLACEHOLDER-secrets
+                optional: true
+          
+          # Optional: Add individual env vars if needed
+          # env:
+          #   - name: CUSTOM_VAR
+          #     value: "custom-value"
+          
+          # Optional: Resource limits
+          # resources:
+          #   requests:
+          #     memory: "128Mi"
+          #     cpu: "100m"
+          #   limits:
+          #     memory: "512Mi"
+          #     cpu: "500m"
+          
+          # Optional: Health checks
+          # livenessProbe:
+          #   httpGet:
+          #     path: /health
+          #     port: 8080
+          #   initialDelaySeconds: 30
+          #   periodSeconds: 10
+          # readinessProbe:
+          #   httpGet:
+          #     path: /ready
+          #     port: 8080
+          #   initialDelaySeconds: 5
+          #   periodSeconds: 5

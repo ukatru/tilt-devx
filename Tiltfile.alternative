@@ -1,0 +1,94 @@
+#load('ext://helm_resource', 'helm_resource', 'helm_repo')
+load('ext://podman', 'podman_build')
+load('ext://secret', 'secret_from_dict')
+#load('ext://uibutton', 'cmd_button')
+
+# ========== MANUAL .ENV PARSING ==========
+# Alternative approach: read .env file directly
+def load_env_file(filepath):
+  """Parse .env file and return dict of key-value pairs"""
+  env_vars = {}
+  if os.path.exists(filepath):
+    content = str(read_file(filepath))
+    for line in content.split('\n'):
+      line = line.strip()
+      # Skip comments and empty lines
+      if line and not line.startswith('#'):
+        if '=' in line:
+          key, value = line.split('=', 1)
+          env_vars[key.strip()] = value.strip()
+  return env_vars
+
+# Load .env file
+env_vars = load_env_file('.env')
+
+# Helper function to get env var with fallback
+def get_env(key, default=''):
+  return env_vars.get(key, os.getenv(key, default))
+
+# ========== CONFIGURABLE VARIABLES ==========
+APP_NAME = get_env('APP_NAME', 'python-example')
+SECRET_NAME = get_env('SECRET_NAME', 'app-secrets')
+CONTAINER_FILE = get_env('CONTAINER_FILE', 'Dockerfile.simple')
+K8S_YAML_FILE = get_env('K8S_YAML_FILE', 'k8s.yaml')
+PORT_FORWARD = get_env('PORT_FORWARD', '8080:8787')
+DOCKER_REGISTRY = get_env('DOCKER_REGISTRY', 'docker.io/ukatru')
+AWS_REGION = get_env('AWS_REGION', 'us-west-2')
+AWS_ACCOUNT_ID = get_env('AWS_ACCOUNT_ID', '')
+USE_ECR = get_env('USE_ECR', 'false').lower() == 'true'
+
+print('APP_NAME: ' + APP_NAME)
+print('SECRET_NAME: ' + SECRET_NAME)
+
+# ========== ECR LOGIN (if enabled) ==========
+if USE_ECR and AWS_ACCOUNT_ID:
+  ecr_registry = '{}.dkr.ecr.{}.amazonaws.com'.format(AWS_ACCOUNT_ID, AWS_REGION)
+  local_resource(
+    'ecr-login',
+    'aws ecr get-login-password --region {} | podman login --username AWS --password-stdin {}'.format(AWS_REGION, ecr_registry),
+    labels=['setup']
+  )
+  DOCKER_REGISTRY = ecr_registry
+
+# ========== KUBERNETES CONTEXT ==========
+allow_k8s_contexts('kubernetes-admin@kubernetes')
+default_registry(DOCKER_REGISTRY)
+
+# ========== DYNAMIC SECRETS ==========
+# Collect all env vars that start with SECRET_
+secret_inputs = {}
+
+# Check both .env file and environment
+all_vars = {}
+all_vars.update(env_vars)
+all_vars.update(os.environ)
+
+for key, value in all_vars.items():
+  if key.startswith('SECRET_'):
+    # Remove SECRET_ prefix and convert to lowercase with hyphens
+    secret_key = key[7:].lower().replace('_', '-')
+    secret_inputs[secret_key] = value
+    print('Adding secret: {} (from {})'.format(secret_key, key))
+
+# Add default postgres password if not provided
+if 'postgres-password' not in secret_inputs:
+  postgres_pwd = get_env('POSTGRESQL_PASSWORD', 'test')
+  secret_inputs['postgres-password'] = postgres_pwd
+  print('Adding secret: postgres-password')
+
+print('Total secrets to create: {}'.format(len(secret_inputs)))
+print('Secret keys: {}'.format(', '.join(secret_inputs.keys())))
+
+k8s_yaml(secret_from_dict(SECRET_NAME, inputs=secret_inputs))
+
+# ========== BUILD AND DEPLOY ==========
+podman_build(APP_NAME, '.', 
+  extra_flags=['--file', CONTAINER_FILE],
+)
+k8s_yaml(K8S_YAML_FILE)
+
+k8s_resource(APP_NAME, 
+  labels=['app'],
+  port_forwards=PORT_FORWARD,
+  trigger_mode=TRIGGER_MODE_MANUAL
+)
