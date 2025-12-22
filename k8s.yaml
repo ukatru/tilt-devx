@@ -23,3 +23,7 @@ spec:
         - secretRef:
             name: {{SECRET_NAME}}
             optional: true
+        - secretRef:
+            name: common-secret
+            optional: true
+{{CONFIGMAP_VOLUME}}

@@ -1,0 +1,17 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost;Database=myapp;User Id=sa;Password=YourPassword;"
+  },
+  "AppSettings": {
+    "ApiBaseUrl": "https://api.example.com",
+    "CacheExpiration": 3600,
+    "EnableFeatureX": true
+  }
+}
