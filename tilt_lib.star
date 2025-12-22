@@ -38,6 +38,7 @@ def get_config(env_file='.env'):
     'AWS_ACCOUNT_ID': get_env('AWS_ACCOUNT_ID', ''),
     'USE_ECR': get_env('USE_ECR', 'false').lower() == 'true',
     'CREATE_SECRETS': get_env('CREATE_SECRETS', 'true').lower() == 'true',
+    'CONFIG_FILES_PATH': get_env('CONFIG_FILES_PATH', ''),  # Optional path to config files
   }
   
   # Opinionated names
@@ -115,10 +116,41 @@ def create_configmap(config):
   config_files = ['appsettings.json', 'config.json', 'config.yaml', 'config.yml']
   configmap_data = {}
   
+  # List of paths to check
+  search_paths = []
+  
+  # 1. User-specified path (highest priority)
+  if config['CONFIG_FILES_PATH']:
+    search_paths.append(config['CONFIG_FILES_PATH'])
+    print('Checking user-specified config path: {}'.format(config['CONFIG_FILES_PATH']))
+  
+  # 2. Common .NET paths
+  search_paths.extend([
+    '.',                    # Current directory
+    './config',             # config subdirectory
+    './Config',             # Config subdirectory (capitalized)
+    './appsettings',        # appsettings subdirectory
+    './src',                # src directory (common in .NET)
+  ])
+  
   for config_file in config_files:
-    if os.path.exists(config_file):
-      print('Found config file: {}'.format(config_file))
-      configmap_data[config_file] = read_file(config_file)
+    found = False
+    for search_path in search_paths:
+      # Build full path
+      if search_path == '.':
+        full_path = config_file
+      else:
+        full_path = search_path + '/' + config_file
+      
+      if os.path.exists(full_path):
+        print('Found config file: {} at {}'.format(config_file, full_path))
+        configmap_data[config_file] = read_file(full_path)
+        found = True
+        break  # Stop searching once found
+    
+    if not found and config['CONFIG_FILES_PATH']:
+      # Only log if user explicitly specified a path
+      print('Config file {} not found in specified path'.format(config_file))
   
   if len(configmap_data) > 0:
     configmap_yaml = '''apiVersion: v1
