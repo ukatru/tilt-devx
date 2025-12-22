@@ -1,9 +1,15 @@
 # Tiltfile - Main configuration
-# All helper functions are in tilt_lib.star
+# Loads tilt_lib.star from platform-managed location
 
 load('ext://podman', 'podman_build')
 load('ext://secret', 'secret_from_dict')
-load('./tilt_lib.star', 'get_config', 'setup_ecr_login', 'create_common_secrets', 
+
+# Load from platform-managed location (mounted via ConfigMap)
+# Falls back to local copy if not available
+tilt_lib_path = '/apps/tilt-lib/tilt_lib.star' if os.path.exists('/apps/tilt-lib/tilt_lib.star') else './tilt_lib.star'
+print('Loading Tilt library from: ' + tilt_lib_path)
+
+load(tilt_lib_path, 'get_config', 'setup_ecr_login', 'create_common_secrets', 
      'create_app_secrets', 'create_configmap', 'render_k8s_yaml')
 
 # ========== LOAD CONFIGURATION ==========
